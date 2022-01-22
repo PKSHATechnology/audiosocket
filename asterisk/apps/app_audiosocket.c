@@ -112,6 +112,7 @@ static int audiosocket_exec(struct ast_channel *chan, const char *data)
 		ast_log(LOG_ERROR, "Failed to set write format to SLINEAR for channel %s\n", chanName);
 		ao2_ref(writeFormat, -1);
 		ao2_ref(readFormat, -1);
+		close(s);
 		return -1;
 	}
 	if (ast_set_read_format(chan, ast_format_slin)) {
@@ -125,6 +126,7 @@ static int audiosocket_exec(struct ast_channel *chan, const char *data)
 		}
 		ao2_ref(writeFormat, -1);
 		ao2_ref(readFormat, -1);
+		close(s);
 		return -1;
 	}
 
@@ -160,22 +162,24 @@ static int audiosocket_exec(struct ast_channel *chan, const char *data)
 static int audiosocket_run(struct ast_channel *chan, const char *id, int svc)
 {
 	const char *chanName;
+	struct ast_channel *targetChan;
+	int ms = 0;
+	int outfd = -1;
+	struct ast_frame *f;
 
 	if (!chan || ast_channel_state(chan) != AST_STATE_UP) {
+		ast_log(LOG_ERROR, "Channel is %s\n", chan ? "not answered" : "missing");
 		return -1;
 	}
 
 	if (ast_audiosocket_init(svc, id)) {
+		ast_log(LOG_ERROR, "Failed to intialize AudioSocket\n");
 		return -1;
 	}
 
 	chanName = ast_channel_name(chan);
 
 	while (1) {
-		struct ast_channel *targetChan;
-		int ms = 0;
-		int outfd = 0;
-		struct ast_frame *f;
 
 		targetChan = ast_waitfor_nandfds(&chan, 1, &svc, 1, NULL, &outfd, &ms);
 		if (targetChan) {

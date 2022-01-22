@@ -99,7 +99,7 @@ static int handle_audiosocket_connection(const char *server,
 const int ast_audiosocket_connect(const char *server, struct ast_channel *chan)
 {
 	int s = -1;
-	struct ast_sockaddr *addrs;
+	struct ast_sockaddr *addrs = NULL;
 	int num_addrs = 0, i = 0;
 
 	if (chan && ast_autoservice_start(chan) < 0) {
@@ -149,6 +149,8 @@ const int ast_audiosocket_connect(const char *server, struct ast_channel *chan)
 		} else {
 			ast_log(LOG_ERROR, "Connection to %s failed with unexpected error: %s\n",
 				ast_sockaddr_stringify(&addrs[i]), strerror(errno));
+			close(s);
+			s = -1;
 		}
 
 		break;
@@ -162,11 +164,13 @@ end:
 	if (chan && ast_autoservice_stop(chan) < 0) {
 		ast_log(LOG_WARNING, "Failed to stop autoservice for channel %s\n",
 		ast_channel_name(chan));
+		close(s);
 		return -1;
 	}
 
 	if (i == num_addrs) {
 		ast_log(LOG_ERROR, "Failed to connect to AudioSocket service\n");
+		close(s);
 		return -1;
 	}
 
@@ -374,8 +378,7 @@ static int unload_module(void)
 	return AST_MODULE_LOAD_SUCCESS;
 }
 
-AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_GLOBAL_SYMBOLS | AST_MODFLAG_LOAD_ORDER,
-	"AudioSocket support",
+AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_GLOBAL_SYMBOLS | AST_MODFLAG_LOAD_ORDER, "AudioSocket support",
 	.support_level = AST_MODULE_SUPPORT_EXTENDED,
 	.load = load_module,
 	.unload = unload_module,
