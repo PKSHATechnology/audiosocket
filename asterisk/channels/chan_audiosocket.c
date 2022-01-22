@@ -122,6 +122,19 @@ static int audiosocket_hangup(struct ast_channel *ast)
 	return 0;
 }
 
+enum {
+	OPT_AUDIOSOCKET_CODEC = (1 << 0),
+};
+
+enum {
+	OPT_ARG_AUDIOSOCKET_CODEC = (1 << 0),
+	OPT_ARG_ARRAY_SIZE
+};
+
+AST_APP_OPTIONS(audiosocket_options, BEGIN_OPTIONS
+	AST_APP_OPTION_ARG('c', OPT_AUDIOSOCKET_CODEC, OPT_ARG_AUDIOSOCKET_CODEC),
+END_OPTIONS );
+
 /*! \brief Function called when we should prepare to call the unicast destination */
 static struct ast_channel *audiosocket_request(const char *type,
 	struct ast_format_cap *cap, const struct ast_assigned_ids *assignedids,
@@ -131,12 +144,17 @@ static struct ast_channel *audiosocket_request(const char *type,
 	struct audiosocket_instance *instance = NULL;
 	struct ast_sockaddr address;
 	struct ast_channel *chan;
-    uuid_t uu;
-	int fd;
+	struct ast_format_cap *caps = NULL;
+	struct ast_format *fmt = NULL;
+	uuid_t uu;
+	int fd = -1;
 	AST_DECLARE_APP_ARGS(args,
 		AST_APP_ARG(destination);
 		AST_APP_ARG(idStr);
+		AST_APP_ARG(options);
 	);
+	struct ast_flags opts = { 0, };
+	char *opt_args[OPT_ARG_ARRAY_SIZE];
 
 	if (ast_strlen_zero(data)) {
 		ast_log(LOG_ERROR, "Destination is required for the 'AudioSocket' channel\n");
@@ -164,6 +182,36 @@ static struct ast_channel *audiosocket_request(const char *type,
 		goto failure;
 	}
 
+	if (!ast_strlen_zero(args.options)
+		&& ast_app_parse_options(audiosocket_options, &opts, opt_args,
+			ast_strdupa(args.options))) {
+		ast_log(LOG_ERROR, "'AudioSocket' channel options '%s' parse error\n",
+			args.options);
+		goto failure;
+	}
+
+	if (ast_test_flag(&opts, OPT_AUDIOSOCKET_CODEC)
+		&& !ast_strlen_zero(opt_args[OPT_ARG_AUDIOSOCKET_CODEC])) {
+		fmt = ast_format_cache_get(opt_args[OPT_ARG_AUDIOSOCKET_CODEC]);
+		if (!fmt) {
+			ast_log(LOG_ERROR, "Codec '%s' not found for AudioSocket connection to '%s'\n",
+				opt_args[OPT_ARG_AUDIOSOCKET_CODEC], args.destination);
+			goto failure;
+		}
+	} else {
+		fmt = ast_format_cap_get_format(cap, 0);
+		if (!fmt) {
+			ast_log(LOG_ERROR, "No codec available for AudioSocket connection to '%s'\n",
+				args.destination);
+			goto failure;
+		}
+	}
+
+	caps = ast_format_cap_alloc(AST_FORMAT_CAP_FLAG_DEFAULT);
+	if (!caps) {
+		goto failure;
+	}
+
 	instance = ast_calloc(1, sizeof(*instance));
 	if (!instance) {
 		ast_log(LOG_ERROR, "Failed to allocate AudioSocket channel pvt\n");
@@ -185,11 +233,12 @@ static struct ast_channel *audiosocket_request(const char *type,
 
 	ast_channel_tech_set(chan, &audiosocket_channel_tech);
 
-	ast_channel_nativeformats_set(chan, audiosocket_channel_tech.capabilities);
-	ast_channel_set_writeformat(chan, ast_format_slin);
-	ast_channel_set_rawwriteformat(chan, ast_format_slin);
-	ast_channel_set_readformat(chan, ast_format_slin);
-	ast_channel_set_rawreadformat(chan, ast_format_slin);
+	ast_format_cap_append(caps, fmt, 0);
+	ast_channel_nativeformats_set(chan, caps);
+	ast_channel_set_writeformat(chan, fmt);
+	ast_channel_set_rawwriteformat(chan, fmt);
+	ast_channel_set_readformat(chan, fmt);
+	ast_channel_set_rawreadformat(chan, fmt);
 
 	ast_channel_tech_pvt_set(chan, instance);
 
@@ -198,16 +247,21 @@ static struct ast_channel *audiosocket_request(const char *type,
 
 	ast_channel_unlock(chan);
 
+	ao2_ref(fmt, -1);
+	ao2_ref(caps, -1);
 	return chan;
 
 failure:
 	*cause = AST_CAUSE_FAILURE;
+	ao2_cleanup(fmt);
+	ao2_cleanup(caps);
 	if (instance != NULL) {
 		ast_free(instance);
 		if (fd >= 0) {
 			close(fd);
 		}
 	}
+
 	return NULL;
 }
 
@@ -227,19 +281,18 @@ static int load_module(void)
 	if (!(audiosocket_channel_tech.capabilities = ast_format_cap_alloc(AST_FORMAT_CAP_FLAG_DEFAULT))) {
 		return AST_MODULE_LOAD_DECLINE;
 	}
-	ast_format_cap_append(audiosocket_channel_tech.capabilities, ast_format_slin, 0);
-
+	ast_format_cap_append_by_type(audiosocket_channel_tech.capabilities, AST_MEDIA_TYPE_UNKNOWN);
 	if (ast_channel_register(&audiosocket_channel_tech)) {
 		ast_log(LOG_ERROR, "Unable to register channel class AudioSocket");
 		ao2_ref(audiosocket_channel_tech.capabilities, -1);
 		audiosocket_channel_tech.capabilities = NULL;
 		return AST_MODULE_LOAD_DECLINE;
 	}
+
 	return AST_MODULE_LOAD_SUCCESS;
 }
 
-AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_LOAD_ORDER,
-	"AudioSocket Channel",
+AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_LOAD_ORDER, "AudioSocket Channel",
 	.support_level = AST_MODULE_SUPPORT_EXTENDED,
 	.load = load_module,
 	.unload = unload_module,
